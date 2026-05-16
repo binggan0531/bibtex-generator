@@ -147,7 +147,7 @@ def download_pdf(work, pdf_dir):
     oa_raw = oa.get("oa_url") or (work.get("primary_location") or {}).get("pdf_url")
     pdf_url = resolve_pdf_url(get_unpaywall_pdf(doi) or oa_raw)
     if not pdf_url:
-        return False, "無 PDF"
+        return False, "🔍 找不到免費 PDF 連結"
     safe = re.sub(r'[\\/:*?"<>|]', "_", title[:100]) + ".pdf"
     try:
         r = requests.get(pdf_url, timeout=20, allow_redirects=True,
@@ -156,9 +156,18 @@ def download_pdf(work, pdf_dir):
             with open(os.path.join(pdf_dir, safe), "wb") as f:
                 f.write(r.content)
             return True, "已下載"
-        return False, f"非直接 PDF（{r.status_code}）"
+        elif r.status_code == 403:
+            return False, "🔒 伺服器擋掉自動下載，請點連結手動下載"
+        elif r.status_code == 404:
+            return False, "💔 連結已失效"
+        elif r.status_code == 200:
+            return False, "🌐 需要瀏覽器開啟，請點連結手動下載"
+        else:
+            return False, f"❌ 伺服器回應 {r.status_code}"
+    except requests.exceptions.Timeout:
+        return False, "⏱️ 伺服器回應超時"
     except Exception as e:
-        return False, f"失敗（{e}）"
+        return False, f"❌ 下載失敗（{type(e).__name__}）"
 
 
 def build_sources_html(works, topic):

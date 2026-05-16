@@ -270,7 +270,7 @@ if st.button("搜尋並生成", type="primary", disabled=not topic):
                 oa_raw = oa.get("oa_url") or (w.get("primary_location") or {}).get("pdf_url")
                 pdf_url = resolve_pdf_url(get_unpaywall_pdf(doi) or oa_raw)
                 if not pdf_url:
-                    st.write(f"無 PDF　{title[:55]}")
+                    st.write(f"🔍 找不到免費 PDF 連結　{title[:55]}")
                     continue
                 try:
                     r = requests.get(pdf_url, timeout=20, headers=headers, allow_redirects=True)
@@ -278,11 +278,19 @@ if st.button("搜尋並生成", type="primary", disabled=not topic):
                         safe = re.sub(r'[\\/:*?"<>|]', "_", title[:80]) + ".pdf"
                         zf.writestr(safe, r.content)
                         ok += 1
-                        st.write(f"✅ {title[:55]}")
+                        st.write(f"✅ 已下載　{title[:55]}")
+                    elif r.status_code == 403:
+                        st.write(f"🔒 伺服器擋掉自動下載，請點連結手動下載　{title[:55]}")
+                    elif r.status_code == 404:
+                        st.write(f"💔 連結已失效　{title[:55]}")
+                    elif r.status_code == 200:
+                        st.write(f"🌐 需要瀏覽器開啟，請點連結手動下載　{title[:55]}")
                     else:
-                        st.write(f"❌ 無法取得　{title[:55]}")
-                except Exception:
-                    st.write(f"❌ 下載失敗　{title[:55]}")
+                        st.write(f"❌ 伺服器回應 {r.status_code}　{title[:55]}")
+                except requests.exceptions.Timeout:
+                    st.write(f"⏱️ 伺服器回應超時　{title[:55]}")
+                except Exception as e:
+                    st.write(f"❌ 下載失敗（{type(e).__name__}）　{title[:55]}")
 
         zip_buffer.seek(0)
         status.update(label=f"步驟 2 / 2　PDF 下載完成：{ok}/{len(works)} 篇 ✅", state="complete")
