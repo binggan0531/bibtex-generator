@@ -5,13 +5,21 @@ import re
 import io
 import zipfile
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", st.secrets.get("GROQ_API_KEY", "") if hasattr(st, "secrets") else "")
 EMAIL = "bensonlai94531@gmail.com"
 
 st.set_page_config(page_title="BibTeX 文獻產生器", page_icon="📚", layout="centered")
 st.title("📚 BibTeX 文獻產生器")
 st.caption("搜尋真實學術論文，生成 BibTeX 並下載 PDF")
 st.info("📡 資料來源：OpenAlex — 2.5 億篇真實論文，結果 100% 真實存在")
+
+with st.sidebar:
+    st.header("設定")
+    GROQ_API_KEY = st.text_input(
+        "Groq API Key（輸入中文主題時才需要）",
+        type="password",
+        placeholder="gsk_...",
+        help="免費申請：console.groq.com"
+    )
 
 JOURNAL_GROUPS = {
     "不限": [],
