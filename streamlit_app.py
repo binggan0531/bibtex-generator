@@ -198,6 +198,7 @@ institution_group = st.selectbox("機構篩選", list(INSTITUTION_GROUPS.keys())
 min_citations = st.select_slider("最低引用次數", options=[0, 10, 50, 100, 500, 1000], value=10)
 
 if st.button("搜尋並生成", type="primary", disabled=not topic):
+    st.session_state.results = None
 
     with st.status("步驟 1 / 2　正在搜尋論文...", expanded=True) as status:
         try:
@@ -250,23 +251,7 @@ if st.button("搜尋並生成", type="primary", disabled=not topic):
             bibtex = "\n\n".join(to_bibtex(w) for w in works)
             sources_html = build_sources_html(works, topic)
             filename = re.sub(r'[\\/:*?"<>|]', "_", topic.strip())[:50]
-
             status.update(label=f"步驟 1 / 2　找到 {len(works)} 篇論文 ✅", state="complete")
-
-            st.subheader("📋 文獻來源清單")
-            for i, w in enumerate(works, 1):
-                title = w.get("title") or "Untitled"
-                loc = w.get("primary_location") or {}
-                doi_url = w.get("doi") or ""
-                landing = loc.get("landing_page_url") or ""
-                oa_url = (w.get("open_access") or {}).get("oa_url") or ""
-                link = doi_url or landing or oa_url
-                year = w.get("publication_year") or "n.d."
-                source = (loc.get("source") or {}).get("display_name", "未知期刊")
-                if link:
-                    st.markdown(f"{i}. [{title}]({link}) — *{source}*, {year}")
-                else:
-                    st.markdown(f"{i}. {title} — *{source}*, {year}")
 
         except Exception as e:
             st.error(f"搜尋失敗：{e}")
@@ -299,21 +284,48 @@ if st.button("搜尋並生成", type="primary", disabled=not topic):
                 except Exception:
                     st.write(f"❌ 下載失敗　{title[:55]}")
 
+        zip_buffer.seek(0)
         status.update(label=f"步驟 2 / 2　PDF 下載完成：{ok}/{len(works)} 篇 ✅", state="complete")
 
-    st.success(f"完成！找到 {len(works)} 篇論文，{ok} 篇 PDF 可下載。")
+    st.session_state.results = {
+        "works": works,
+        "bibtex": bibtex,
+        "sources_html": sources_html,
+        "filename": filename,
+        "zip_bytes": zip_buffer.read(),
+        "ok": ok,
+    }
+
+# 結果區（存在 session_state，不受下載按鈕重整影響）
+if "results" in st.session_state and st.session_state.results:
+    r = st.session_state.results
+    st.success(f"完成！找到 {len(r['works'])} 篇論文，{r['ok']} 篇 PDF 可下載。")
+
+    st.subheader("📋 文獻來源清單")
+    for i, w in enumerate(r["works"], 1):
+        title = w.get("title") or "Untitled"
+        loc = w.get("primary_location") or {}
+        doi_url = w.get("doi") or ""
+        landing = loc.get("landing_page_url") or ""
+        oa_url = (w.get("open_access") or {}).get("oa_url") or ""
+        link = doi_url or landing or oa_url
+        year = w.get("publication_year") or "n.d."
+        source = (loc.get("source") or {}).get("display_name", "未知期刊")
+        if link:
+            st.markdown(f"{i}. [{title}]({link}) — *{source}*, {year}")
+        else:
+            st.markdown(f"{i}. {title} — *{source}*, {year}")
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.download_button("⬇️ 下載 BibTeX", data=bibtex,
-                           file_name=f"{filename}.bib", mime="text/plain", use_container_width=True)
+        st.download_button("⬇️ 下載 BibTeX", data=r["bibtex"],
+                           file_name=f"{r['filename']}.bib", mime="text/plain", use_container_width=True)
     with col2:
-        st.download_button("⬇️ 下載來源清單", data=sources_html,
-                           file_name=f"{filename}_sources.html", mime="text/html", use_container_width=True)
+        st.download_button("⬇️ 下載來源清單", data=r["sources_html"],
+                           file_name=f"{r['filename']}_sources.html", mime="text/html", use_container_width=True)
     with col3:
-        if ok > 0:
-            zip_buffer.seek(0)
-            st.download_button("⬇️ 下載 PDF (zip)", data=zip_buffer,
-                               file_name=f"{filename}_pdfs.zip", mime="application/zip", use_container_width=True)
+        if r["ok"] > 0:
+            st.download_button("⬇️ 下載 PDF (zip)", data=r["zip_bytes"],
+                               file_name=f"{r['filename']}_pdfs.zip", mime="application/zip", use_container_width=True)
         else:
             st.button("⬇️ 下載 PDF (zip)", disabled=True, use_container_width=True)
