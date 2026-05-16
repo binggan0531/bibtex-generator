@@ -239,7 +239,7 @@ def main():
     sort_param = "cited_by_count:desc" if args.sort == "引用次數" else "publication_date:desc"
     lang_map = {"英文": "en", "中文": "zh"}
     params = {
-        "search": search_topic,
+        "title.search": search_topic,
         "per-page": args.count,
         "sort": sort_param,
         "mailto": EMAIL,
