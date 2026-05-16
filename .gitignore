@@ -1,0 +1,7 @@
+.env
+output/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+debug_pdf.py
+download_pdfs.py
