@@ -239,13 +239,12 @@ def main():
     sort_param = "cited_by_count:desc" if args.sort == "引用次數" else "publication_date:desc"
     lang_map = {"英文": "en", "中文": "zh"}
     params = {
-        "title.search": search_topic,
         "per-page": args.count,
         "sort": sort_param,
         "mailto": EMAIL,
         "select": "title,authorships,publication_year,primary_location,doi,type,cited_by_count,open_access,ids",
     }
-    filters = []
+    filters = [f"title.search:{search_topic}"]
     if args.lang in lang_map:
         filters.append(f"language:{lang_map[args.lang]}")
     if args.only_oa:

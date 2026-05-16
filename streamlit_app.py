@@ -211,13 +211,12 @@ if st.button("搜尋並生成", type="primary", disabled=not topic):
             sort_param = "cited_by_count:desc" if sort == "引用次數" else "publication_date:desc"
             lang_map = {"英文": "en", "中文": "zh"}
             params = {
-                "title.search": search_topic,
                 "per-page": count,
                 "sort": sort_param,
                 "mailto": EMAIL,
                 "select": "title,authorships,publication_year,primary_location,doi,type,cited_by_count,open_access",
             }
-            filters = []
+            filters = [f"title.search:{search_topic}"]
             if lang in lang_map:
                 filters.append(f"language:{lang_map[lang]}")
             if only_oa:
