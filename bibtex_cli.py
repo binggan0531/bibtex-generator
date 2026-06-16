@@ -3,6 +3,7 @@
 import sys
 import os
 import re
+import json
 import argparse
 import requests
 import subprocess
@@ -13,7 +14,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 ZOTERO_EXE = r"C:\Program Files\Zotero\zotero.exe"
+ZOTERO_API_KEY = os.getenv("ZOTERO_API_KEY", "")
+ZOTERO_USER_ID = os.getenv("ZOTERO_USER_ID", "")
+ZOTERO_DEFAULT_COLLECTION = "YSRSHZ52"  # Quant Trading collection
 BASE_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+PAPERS_BASE_DIR = r"C:\dev\Zotero-Library\Papers"
 EMAIL = "bensonlai94531@gmail.com"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
@@ -170,6 +175,106 @@ def download_pdf(work, pdf_dir):
         return False, f"❌ 下載失敗（{type(e).__name__}）"
 
 
+def build_zotero_item(work, collection_key=None):
+    authors = [a.get("author", {}).get("display_name", "") for a in work.get("authorships", [])]
+    year = str(work.get("publication_year") or "")
+    title = work.get("title") or "Untitled"
+    loc = work.get("primary_location") or {}
+    journal = (loc.get("source") or {}).get("display_name", "")
+    doi_url = work.get("doi") or ""
+    doi = doi_url.replace("https://doi.org/", "")
+    landing = loc.get("landing_page_url") or ""
+    oa_url = (work.get("open_access") or {}).get("oa_url") or ""
+    url = doi_url or landing or oa_url
+    work_type = work.get("type", "")
+
+    type_map = {
+        "article": "journalArticle",
+        "proceedings-article": "conferencePaper",
+        "book": "book",
+        "book-chapter": "bookSection",
+    }
+    item_type = type_map.get(work_type, "journalArticle")
+
+    creators = []
+    for name in authors:
+        parts = name.strip().rsplit(" ", 1)
+        if len(parts) == 2:
+            creators.append({"creatorType": "author", "firstName": parts[0], "lastName": parts[1]})
+        else:
+            creators.append({"creatorType": "author", "firstName": "", "lastName": name})
+
+    item = {
+        "itemType": item_type,
+        "title": title,
+        "creators": creators,
+        "date": year,
+        "url": url,
+        "collections": [collection_key] if collection_key else [],
+        "tags": [],
+        "relations": {},
+    }
+    if journal:
+        item["publicationTitle"] = journal
+    if doi:
+        item["DOI"] = doi
+    return item
+
+
+def import_to_zotero(works, pdf_dir, collection_key, api_key, user_id):
+    try:
+        from pyzotero import zotero as pyzotero_lib
+    except ImportError:
+        print("⚠️  pyzotero 未安裝，跳過 Zotero 匯入")
+        return
+
+    zot = pyzotero_lib.Zotero(user_id, "user", api_key)
+    print("\n📚 匯入 Zotero...")
+    imported = 0
+
+    for w in works:
+        short_title = (w.get("title") or "Untitled")[:60]
+        try:
+            doi = (w.get("doi") or "").replace("https://doi.org/", "")
+            if doi:
+                existing = zot.items(q=doi, qmode="everything", limit=5)
+                if any(item["data"].get("DOI", "").lower() == doi.lower() for item in existing):
+                    print(f"  ⚠️ 已存在，跳過：{short_title}")
+                    imported += 1
+                    continue
+
+            result = zot.create_items([build_zotero_item(w, collection_key)])
+            if not result.get("success"):
+                print(f"  ❌ 匯入失敗：{short_title}")
+                continue
+
+            item_key = result["success"]["0"]
+
+            safe = re.sub(r'[\\/:*?"<>|]', "_", (w.get("title") or "Untitled")[:100]) + ".pdf"
+            pdf_path = os.path.join(pdf_dir, safe)
+            if os.path.exists(pdf_path):
+                zot.create_items([{
+                    "itemType": "attachment",
+                    "linkMode": "linked_file",
+                    "title": os.path.basename(pdf_path),
+                    "path": pdf_path,
+                    "contentType": "application/pdf",
+                    "parentItem": item_key,
+                    "collections": [],
+                    "tags": [],
+                    "relations": {},
+                }])
+                print(f"  ✅ {short_title}（含 PDF）")
+            else:
+                print(f"  ✅ {short_title}")
+            imported += 1
+
+        except Exception as e:
+            print(f"  ❌ {short_title}：{e}")
+
+    print(f"📚 已匯入 {imported}/{len(works)} 篇到 Zotero（Collection: {collection_key}）")
+
+
 def build_sources_html(works, topic):
     rows = []
     for i, w in enumerate(works, 1):
@@ -219,6 +324,8 @@ def main():
     parser.add_argument("--institution", default="不限")
     parser.add_argument("--min-citations", type=int, default=10)
     parser.add_argument("--only-oa", action="store_true", default=True)
+    parser.add_argument("--zotero-collection", default=ZOTERO_DEFAULT_COLLECTION)
+    parser.add_argument("--phrase", default="", help="必須出現在標題的核心片語（用引號做 exact match）")
     args = parser.parse_args()
 
     search_topic = args.topic
@@ -232,38 +339,53 @@ def main():
     # 建立資料夾（用原始中文主題命名，搜尋用英文）
     folder = re.sub(r'[\\/:*?"<>|]', "_", args.topic.strip())[:50]
     out_dir = os.path.join(BASE_OUTPUT_DIR, folder)
-    pdf_dir = os.path.join(out_dir, "pdfs")
+    pdf_dir = os.path.join(PAPERS_BASE_DIR, folder)
+    os.makedirs(out_dir, exist_ok=True)
     os.makedirs(pdf_dir, exist_ok=True)
 
     # 搜尋參數
     sort_param = "cited_by_count:desc" if args.sort == "引用次數" else "publication_date:desc"
     lang_map = {"英文": "en", "中文": "zh"}
-    params = {
-        "per-page": args.count,
-        "sort": sort_param,
-        "mailto": EMAIL,
-        "select": "title,authorships,publication_year,primary_location,doi,type,cited_by_count,open_access,ids",
-    }
-    filters = [f"title.search:{search_topic}"]
-    if args.lang in lang_map:
-        filters.append(f"language:{lang_map[args.lang]}")
-    if args.only_oa:
-        filters.append("is_oa:true")
-    if args.journal != "不限":
-        ids = fetch_ids("sources", JOURNAL_GROUPS[args.journal])
-        if ids: filters.append("primary_location.source.id:" + "|".join(ids))
-    if args.institution != "不限":
-        ids = fetch_ids("institutions", INSTITUTION_GROUPS[args.institution])
-        if ids: filters.append("authorships.institutions.id:" + "|".join(ids))
-    if args.min_citations > 0:
-        filters.append(f"cited_by_count:>{args.min_citations}")
-    if filters:
-        params["filter"] = ",".join(filters)
 
-    # 搜尋
+    def build_params(use_phrase: bool):
+        p = {
+            "per-page": args.count,
+            "sort": sort_param,
+            "mailto": EMAIL,
+            "select": "title,authorships,publication_year,primary_location,doi,type,cited_by_count,open_access,ids",
+        }
+        if use_phrase and args.phrase:
+            # Phrase search：標題必須包含該片語（exact match），再用主題做 abstract 輔助
+            f = [f'title.search:"{args.phrase}"']
+        else:
+            f = [f"title.search:{search_topic}"]
+        if args.lang in lang_map:
+            f.append(f"language:{lang_map[args.lang]}")
+        if args.only_oa:
+            f.append("is_oa:true")
+        if args.journal != "不限":
+            ids = fetch_ids("sources", JOURNAL_GROUPS[args.journal])
+            if ids: f.append("primary_location.source.id:" + "|".join(ids))
+        if args.institution != "不限":
+            ids = fetch_ids("institutions", INSTITUTION_GROUPS[args.institution])
+            if ids: f.append("authorships.institutions.id:" + "|".join(ids))
+        if args.min_citations > 0:
+            f.append(f"cited_by_count:>{args.min_citations}")
+        p["filter"] = ",".join(f)
+        return p
+
+    # 搜尋（有 phrase 時先用 exact match；若 0 結果自動 fallback 到一般搜尋）
+    params = build_params(use_phrase=bool(args.phrase))
     resp = requests.get("https://api.openalex.org/works", params=params, timeout=20)
     resp.raise_for_status()
     raw = resp.json().get("results", [])
+
+    if not raw and args.phrase:
+        print(f"⚠️  Phrase search 找不到結果，改用一般搜尋...")
+        params = build_params(use_phrase=False)
+        resp = requests.get("https://api.openalex.org/works", params=params, timeout=20)
+        resp.raise_for_status()
+        raw = resp.json().get("results", [])
 
     # 去重
     seen, works = set(), []
@@ -292,25 +414,53 @@ def main():
         f.write(html)
     print(f"🌐 來源清單已儲存：output/{folder}/sources.html")
 
-    # 匯入 Zotero
-    if os.path.exists(ZOTERO_EXE):
-        subprocess.Popen([ZOTERO_EXE, "-file", bib_path])
-        print("📚 已匯入 Zotero")
-
-    # 下載 PDF
+    # 下載 PDF（先下載，才能附加到 Zotero）
     print("⬇️  開始下載 PDF...")
     ok = 0
+    results_data = []
     for w in works:
-        title = (w.get("title") or "Untitled")[:55]
+        title = (w.get("title") or "Untitled")
+        authors = [a.get("author", {}).get("display_name", "") for a in w.get("authorships", [])]
+        author_last = re.sub(r"[^a-zA-Z]", "", authors[0].split()[-1]) if authors else "unknown"
+        year = str(w.get("publication_year") or "")
+        safe = re.sub(r'[\\/:*?"<>|]', "_", title[:100]) + ".pdf"
+        pdf_path = os.path.join(pdf_dir, safe)
         success, msg = download_pdf(w, pdf_dir)
         if success:
             ok += 1
-            print(f"  ✅ {title}")
+            print(f"  ✅ {title[:55]}")
         else:
-            print(f"  ❌ {msg}　{title}")
+            print(f"  ❌ {msg}　{title[:55]}")
+        results_data.append({
+            "index": len(results_data) + 1,
+            "title": title,
+            "author_last": author_last,
+            "year": year,
+            "citations": w.get("cited_by_count", 0),
+            "pdf_path": pdf_path if success else "",
+            "downloaded": success,
+        })
+    print(f"\n🎉 {ok}/{len(works)} 篇 PDF 下載成功")
 
-    print(f"\n🎉 完成！{ok}/{len(works)} 篇 PDF 下載成功")
-    print(f"📁 所有檔案位於：output/{folder}/")
+    # 輸出 results.json 供後續流程使用
+    results_json = {
+        "folder": folder,
+        "pdf_dir": pdf_dir,
+        "papers": results_data,
+    }
+    results_path = os.path.join(out_dir, "results.json")
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(results_json, f, ensure_ascii=False, indent=2)
+    print(f"📋 results.json 已儲存：{results_path}")
+
+    # 匯入 Zotero
+    if ZOTERO_API_KEY and ZOTERO_USER_ID:
+        import_to_zotero(works, pdf_dir, args.zotero_collection, ZOTERO_API_KEY, ZOTERO_USER_ID)
+    elif os.path.exists(ZOTERO_EXE):
+        subprocess.Popen([ZOTERO_EXE, "-file", bib_path])
+        print("📚 已開啟 Zotero（請手動確認匯入）")
+
+    print(f"\n📁 所有檔案位於：output/{folder}/")
 
 
 if __name__ == "__main__":
