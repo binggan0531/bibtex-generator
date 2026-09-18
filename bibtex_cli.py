@@ -16,7 +16,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 ZOTERO_EXE = r"C:\Program Files\Zotero\zotero.exe"
 ZOTERO_API_KEY = os.getenv("ZOTERO_API_KEY", "")
 ZOTERO_USER_ID = os.getenv("ZOTERO_USER_ID", "")
-ZOTERO_DEFAULT_COLLECTION = "8C9KFCNW"  # Quant Trading > 論文 Papers 子夾 collection
+ZOTERO_DEFAULT_COLLECTION = "8C9KFCNW"  # 未指定 --project 時的 fallback：Quant Trading > 論文 Papers
+ZOTERO_PAPERS_SUBCOLLECTION = "論文 Papers"
+# 專案資料夾名與 Zotero 頂層 collection 名對不上時的對照（名稱一致者不必列）
+PROJECT_ALIASES = {"government project": "大專生研究計畫－肺癌環境風險"}
 BASE_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 PAPERS_BASE_DIR = r"C:\dev\Zotero-Library\Papers"
 EMAIL = "bensonlai94531@gmail.com"
@@ -221,7 +224,37 @@ def build_zotero_item(work, collection_key=None):
     return item
 
 
-def import_to_zotero(works, pdf_dir, collection_key, api_key, user_id):
+def _norm_name(name):
+    return re.sub(r"[\s_-]+", "", name).lower()
+
+
+def resolve_collection(zot, project):
+    """找出（或建立）「<project> ▸ 論文 Papers」，回傳子夾的 collection key。"""
+    project = PROJECT_ALIASES.get(project, project)
+    cols = zot.everything(zot.collections())
+    top = next((c for c in cols
+                if not c["data"].get("parentCollection")
+                and _norm_name(c["data"]["name"]) == _norm_name(project)), None)
+    if top:
+        parent_key = top["key"]
+    else:
+        parent_key = zot.create_collections([{"name": project}])["success"]["0"]
+        print(f"  📁 已建立 Zotero collection：{project}")
+
+    sub = next((c for c in cols
+                if c["data"].get("parentCollection") == parent_key
+                and _norm_name(c["data"]["name"]) == _norm_name(ZOTERO_PAPERS_SUBCOLLECTION)), None)
+    if sub:
+        return sub["key"]
+
+    key = zot.create_collections(
+        [{"name": ZOTERO_PAPERS_SUBCOLLECTION, "parentCollection": parent_key}]
+    )["success"]["0"]
+    print(f"  📁 已建立 Zotero 子夾：{project} ▸ {ZOTERO_PAPERS_SUBCOLLECTION}")
+    return key
+
+
+def import_to_zotero(works, pdf_dir, collection_key, api_key, user_id, project=""):
     try:
         from pyzotero import zotero as pyzotero_lib
     except ImportError:
@@ -229,6 +262,9 @@ def import_to_zotero(works, pdf_dir, collection_key, api_key, user_id):
         return
 
     zot = pyzotero_lib.Zotero(user_id, "user", api_key)
+    if project and not collection_key:
+        collection_key = resolve_collection(zot, project)
+    collection_key = collection_key or ZOTERO_DEFAULT_COLLECTION
     print("\n📚 匯入 Zotero...")
     imported = 0
 
@@ -324,7 +360,8 @@ def main():
     parser.add_argument("--institution", default="不限")
     parser.add_argument("--min-citations", type=int, default=10)
     parser.add_argument("--only-oa", action="store_true", default=True)
-    parser.add_argument("--zotero-collection", default=ZOTERO_DEFAULT_COLLECTION)
+    parser.add_argument("--project", default="", help="呼叫端專案名（對應 Zotero 頂層 collection 與 Papers 子資料夾）")
+    parser.add_argument("--zotero-collection", default="", help="直接指定 collection key，會覆蓋 --project")
     parser.add_argument("--phrase", default="", help="必須出現在標題的核心片語（用引號做 exact match）")
     args = parser.parse_args()
 
@@ -339,7 +376,8 @@ def main():
     # 建立資料夾（用原始中文主題命名，搜尋用英文）
     folder = re.sub(r'[\\/:*?"<>|]', "_", args.topic.strip())[:50]
     out_dir = os.path.join(BASE_OUTPUT_DIR, folder)
-    pdf_dir = os.path.join(PAPERS_BASE_DIR, folder)
+    project_dir = re.sub(r'[\\/:*?"<>|]', "_", args.project.strip())[:50]
+    pdf_dir = os.path.join(PAPERS_BASE_DIR, project_dir, folder) if project_dir else os.path.join(PAPERS_BASE_DIR, folder)
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(pdf_dir, exist_ok=True)
 
@@ -455,7 +493,7 @@ def main():
 
     # 匯入 Zotero
     if ZOTERO_API_KEY and ZOTERO_USER_ID:
-        import_to_zotero(works, pdf_dir, args.zotero_collection, ZOTERO_API_KEY, ZOTERO_USER_ID)
+        import_to_zotero(works, pdf_dir, args.zotero_collection, ZOTERO_API_KEY, ZOTERO_USER_ID, args.project)
     elif os.path.exists(ZOTERO_EXE):
         subprocess.Popen([ZOTERO_EXE, "-file", bib_path])
         print("📚 已開啟 Zotero（請手動確認匯入）")
