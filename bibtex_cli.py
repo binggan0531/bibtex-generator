@@ -359,7 +359,7 @@ def main():
     parser.add_argument("--journal", default="不限")
     parser.add_argument("--institution", default="不限")
     parser.add_argument("--min-citations", type=int, default=10)
-    parser.add_argument("--only-oa", action="store_true", default=True)
+    parser.add_argument("--only-oa", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--project", default="", help="呼叫端專案名（對應 Zotero 頂層 collection 與 Papers 子資料夾）")
     parser.add_argument("--zotero-collection", default="", help="直接指定 collection key，會覆蓋 --project")
     parser.add_argument("--phrase", default="", help="必須出現在標題的核心片語（用引號做 exact match）")
