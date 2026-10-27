@@ -147,8 +147,14 @@ def get_unpaywall_pdf(doi):
     return None
 
 
-def download_pdf(work, pdf_dir):
+def pdf_filename(work):
+    # OpenAlex ID suffix: titles differing only by case collide on case-insensitive Windows FS
     title = work.get("title") or "Untitled"
+    wid = (work.get("id") or "").rsplit("/", 1)[-1]
+    return re.sub(r'[\\/:*?"<>|]', "_", title[:100]) + (f" [{wid}]" if wid else "") + ".pdf"
+
+
+def download_pdf(work, pdf_dir):
     doi_url = work.get("doi") or ""
     doi = doi_url.replace("https://doi.org/", "")
     oa = work.get("open_access") or {}
@@ -156,7 +162,7 @@ def download_pdf(work, pdf_dir):
     pdf_url = resolve_pdf_url(get_unpaywall_pdf(doi) or oa_raw)
     if not pdf_url:
         return False, "🔍 找不到免費 PDF 連結"
-    safe = re.sub(r'[\\/:*?"<>|]', "_", title[:100]) + ".pdf"
+    safe = pdf_filename(work)
     try:
         r = requests.get(pdf_url, timeout=20, allow_redirects=True,
                          headers={"User-Agent": "Mozilla/5.0", "Accept": "application/pdf,*/*"})
@@ -286,8 +292,7 @@ def import_to_zotero(works, pdf_dir, collection_key, api_key, user_id, project="
 
             item_key = result["success"]["0"]
 
-            safe = re.sub(r'[\\/:*?"<>|]', "_", (w.get("title") or "Untitled")[:100]) + ".pdf"
-            pdf_path = os.path.join(pdf_dir, safe)
+            pdf_path = os.path.join(pdf_dir, pdf_filename(w))
             if os.path.exists(pdf_path):
                 zot.create_items([{
                     "itemType": "attachment",
@@ -461,8 +466,7 @@ def main():
         authors = [a.get("author", {}).get("display_name", "") for a in w.get("authorships", [])]
         author_last = re.sub(r"[^a-zA-Z]", "", authors[0].split()[-1]) if authors else "unknown"
         year = str(w.get("publication_year") or "")
-        safe = re.sub(r'[\\/:*?"<>|]', "_", title[:100]) + ".pdf"
-        pdf_path = os.path.join(pdf_dir, safe)
+        pdf_path = os.path.join(pdf_dir, pdf_filename(w))
         success, msg = download_pdf(w, pdf_dir)
         if success:
             ok += 1
